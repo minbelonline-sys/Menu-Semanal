@@ -1,0 +1,439 @@
+streamlit
+import os
+import json
+import math
+import datetime
+import streamlit as st
+
+
+# 1. Configuración de conexión con Supabase
+SUPABASE_URL = "https://supabase.com/dashboard/project/untzbvrhqswmriefpysg/settings/general"  # Tu URL real con https://
+SUPABASE_KEY = "Silvia123*Supabase"              # Tu clave anon real
+
+# =========================================================
+# GESTIÓN DE DATOS LOCALES (JSON)
+# =========================================================
+FILE_ING = "ingredientes.json"
+FILE_REC = "recetas.json"
+FILE_MENU = "menu_semanal_por_miembro.json"
+FILE_MIEMBROS = "miembros_casa.json"
+FILE_LISTA = "lista_compra.json"
+
+def cargar_json(filename, default_type="list"):
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if default_type == "dict" and isinstance(data, dict):
+                    return data
+                if default_type == "list" and isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+    return {} if default_type == "dict" else []
+
+def guardar_json(filename, data):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+st.set_page_config(page_title="Planificador de Menús", page_icon="🥗", layout="wide")
+st.title("🥗 Mi Planificador de Menús Semanales")
+
+SECCIONES_SUPER = [
+    "1. Agua, detergentes, gato, papel wc, pan, llogures",
+    "2. Cafe, Leche, Jabon, higiene",
+    "3. Pizza, Aatun, guindillas, Olivas, Tonica, Cerveza",
+    "4. Aceite, Sal, Harina, Esparragos, Tomate frito, Calabacin, Verduras caldo, Setas variadas, Pimiento, Berengena, Melon, Limones, Pera, Manzana",
+    "5. Tomates, Pepino, Cebolla, Ajos, Patatas, Lechuga, Aguacate, Canonigos, Rucula, Chocolate, Barritas, Verduras congelada, Pescado",
+    "6. Pavo, Jamon, York, Arroz, Pasta, Queso, Huevos, Ternera, Pollo, Conejo, Longaniza",
+    "7. Amazon"
+]
+
+CATEGORIAS_MENU = ["Desayuno", "Media mañana", "Comida", "Media tarde", "Cena", "Postres"]
+MOMENTOS_DIA = ["Desayuno", "Media mañana", "Comida", "Media tarde", "Cena"]
+
+all_ingredientes = cargar_json(FILE_ING, "list")
+recetas = cargar_json(FILE_REC, "list")
+miembros_casa = cargar_json(FILE_MIEMBROS, "list")
+if not miembros_casa:
+    miembros_casa = ["Persona 1"]
+
+# =========================================================
+# SELECTOR DE SEMANA / FECHA
+# =========================================================
+st.sidebar.header("📅 Selector de Semana")
+hoy = datetime.date.today()
+lunes_actual = hoy - datetime.timedelta(days=hoy.weekday())
+lunes_siguiente = lunes_actual + datetime.timedelta(days=7)
+lunes_anterior = lunes_actual - datetime.timedelta(days=7)
+
+opcion_semana = st.sidebar.selectbox(
+    "¿Qué semana deseas planificar?",
+    [
+        f"Esta semana (Lunes {lunes_actual.strftime('%d/%m/%Y')})",
+        f"Semana siguiente (Lunes {lunes_siguiente.strftime('%d/%m/%Y')})",
+        f"Semana pasada (Lunes {lunes_anterior.strftime('%d/%m/%Y')})",
+        "Otra fecha / semana personalizada"
+    ]
+)
+
+if " personalizada" in opcion_semana:
+    fecha_custom = st.sidebar.date_input("Selecciona un día de la semana:", value=lunes_actual)
+    lunes_seleccionado = fecha_custom - datetime.timedelta(days=fecha_custom.weekday())
+else:
+    if "Esta semana" in opcion_semana:
+        lunes_seleccionado = lunes_actual
+    elif "Semana siguiente" in opcion_semana:
+        lunes_seleccionado = lunes_siguiente
+    else:
+        lunes_seleccionado = lunes_anterior
+
+key_semana = lunes_seleccionado.strftime("%Y-%m-%d")
+st.sidebar.info(f"Planificando semana del **{lunes_seleccionado.strftime('%d/%m/%Y')}**")
+
+menus_globales = cargar_json(FILE_MENU, "dict")
+if key_semana not in menus_globales:
+    menus_globales[key_semana] = {}
+menu_semana_actual = menus_globales[key_semana]
+
+# =========================================================
+# 1. VISTA PRINCIPAL: MENÚ POR DÍA, MOMENTO Y MIEMBRO
+# =========================================================
+st.header(f"🍽️ Planificación Semanal (Semana del {lunes_seleccionado.strftime('%d/%m/%Y')})")
+
+dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+
+with st.expander("📝 Configurar Miembros de la Casa", expanded=False):
+    col_m1, col_m2 = st.columns([2, 1])
+    with col_m1:
+        nuevo_m = st.text_input("Añadir miembro:", placeholder="Ej: Anna, Marc...", key="in_nuevo_miembro")
+    with col_m2:
+        if st.button("➕ Añadir Miembro"):
+            if nuevo_m.strip() and nuevo_m.strip() not in miembros_casa:
+                miembros_casa.append(nuevo_m.strip())
+                guardar_json(FILE_MIEMBROS, miembros_casa)
+                st.success(f"Añadido {nuevo_m}")
+                st.rerun()
+    st.write(f"**Miembros actuales:** {', '.join(miembros_casa)}")
+
+tabs_dias = st.tabs(dias)
+nombres_recetas = [r.get("nombre") for r in recetas if r.get("nombre")]
+
+for idx, dia in enumerate(dias):
+    with tabs_dias[idx]:
+        st.subheader(f"📅 {dia}")
+        if dia not in menu_semana_actual:
+            menu_semana_actual[dia] = {}
+            
+        for momento in MOMENTOS_DIA:
+            st.markdown(f"**⏰ {momento}**")
+            if momento not in menu_semana_actual[dia]:
+                menu_semana_actual[dia][momento] = {}
+                
+            cols_miembros = st.columns(len(miembros_casa))
+            for m_idx, miembro in enumerate(miembros_casa):
+                with cols_miembros[m_idx]:
+                    st.caption(f"👤 {miembro}")
+                    recetas_momento = [r.get("nombre") for r in recetas if r.get("categoria", "").lower() == momento.lower()]
+                    if not recetas_momento:
+                        recetas_momento = nombres_recetas
+                        
+                    platos_previos = menu_semana_actual[dia][momento].get(miembro, [])
+                    platos_previos = [p for p in platos_previos if p in nombres_recetas]
+                    
+                    sel_miembro = st.multiselect(
+                        f"Platos {miembro} ({momento})",
+                        options=nombres_recetas,
+                        default=platos_previos,
+                        key=f"sel_{key_semana}_{dia}_{momento}_{miembro}",
+                        label_visibility="collapsed"
+                    )
+                    menu_semana_actual[dia][momento][miembro] = sel_miembro
+            st.write("---")
+
+guardar_json(FILE_MENU, menus_globales)
+
+# =========================================================
+# 2. LISTA DE LA COMPRA ACTIVA Y CESTA (MERCADONA / SÚPER)
+# =========================================================
+st.header("🛒 Lista de la Compra Activa (Basada en la semana seleccionada)")
+
+col_gen_btn, col_del_btn = st.columns([0.8, 0.2])
+with col_gen_btn:
+    btn_generar = st.button("🔄 Generar / Actualizar Lista de la Compra para esta Semana", type="primary")
+with col_del_btn:
+    if st.button("🗑️ Vaciar Lista", use_container_width=True):
+        guardar_json(FILE_LISTA, [])
+        st.success("¡Lista de la compra vaciada!")
+        st.rerun()
+
+if btn_generar and recetas:
+    cantidades_totales = {}
+    
+    for dia in dias:
+        momentos_dia_dict = menu_semana_actual.get(dia, {})
+        for momento, miembros_dict in momentos_dia_dict.items():
+            for miembro, lista_platos in miembros_dict.items():
+                for nombre_receta in lista_platos:
+                    receta_obj = next((r for r in recetas if r.get("nombre") == nombre_receta), None)
+                    if receta_obj:
+                        for item in receta_obj.get("ingredientes", []):
+                            ing_id = item.get("ingrediente_id")
+                            cant_req = float(item.get("cantidad_necesaria", 0))
+                            if ing_id:
+                                cantidades_totales[ing_id] = cantidades_totales.get(ing_id, 0.0) + cant_req
+
+    items_compra = []
+    for ing_id, total_necesario in cantidades_totales.items():
+        ing_obj = next((i for i in all_ingredientes if i.get("id") == ing_id), {})
+        pkg_size = float(ing_obj.get("cantidad_paquete", 1000))
+        paquetes_a_comprar = math.ceil(total_necesario / pkg_size) if pkg_size > 0 else 1
+        
+        items_compra.append({
+            "ingrediente_id": ing_id,
+            "cantidad_total_necesaria": total_necesario,
+            "paquetes_a_comprar": paquetes_a_comprar,
+            "comprado": False
+        })
+        
+    guardar_json(FILE_LISTA, items_compra)
+    st.success("¡Lista de la compra actualizada con éxito!")
+    st.rerun()
+
+items_compra = cargar_json(FILE_LISTA, "list")
+
+if items_compra:
+    por_seccion = {sec: [] for sec in SECCIONES_SUPER}
+    por_seccion["Sin Clasificar"] = []
+
+    for item in items_compra:
+        ing_obj = next((i for i in all_ingredientes if i.get("id") == item.get("ingrediente_id")), {})
+        seccion = ing_obj.get("seccion_super", "Sin Clasificar")
+        
+        if seccion in por_seccion:
+            por_seccion[seccion].append((item, ing_obj))
+        else:
+            por_seccion["Sin Clasificar"].append((item, ing_obj))
+
+    st.info("💡 Consejo: Marca lo que ya tengas en casa. Usa el botón '🛒 Añadir a Cesta' para abrir el enlace del producto en una pestaña nueva.")
+
+    for seccion in SECCIONES_SUPER + ["Sin Clasificar"]:
+        pares = por_seccion[seccion]
+        if pares:
+            st.subheader(f"📍 {seccion}")
+            for item, ing_obj in pares:
+                nombre_ing = ing_obj.get("nombre", "Ingrediente")
+                unidad = ing_obj.get("unidad", "g")
+                pkg_size = ing_obj.get("cantidad_paquete", 1000)
+                url_ref = ing_obj.get("url_referencia", "")
+                
+                cant_total = item.get("cantidad_total_necesaria", 0)
+                paquetes = item.get("paquetes_a_comprar", 1)
+                marcado = bool(item.get("comprado", False))
+                ing_id = item.get("ingrediente_id")
+                
+                texto_item = f"**{nombre_ing}**: {cant_total:.0f}{unidad} ➔ Comprar **{paquetes} paquete(s)** de {pkg_size}{unidad}"
+                
+                col_check, col_link = st.columns([0.7, 0.3])
+                with col_check:
+                    check = st.checkbox(texto_item, value=marcado, key=f"item_local_{ing_id}")
+                    if check != marcado:
+                        item["comprado"] = check
+                        guardar_json(FILE_LISTA, items_compra)
+                        st.rerun()
+                with col_link:
+                    if url_ref and str(url_ref).startswith("http"):
+                        st.markdown(f'<a href="{url_ref}" target="_blank" style="text-decoration:none;"><button style="background-color:#0083B8;color:white;border:none;padding:5px 10px;border-radius:5px;cursor:pointer;font-size:13px;">🛒 Añadir a Cesta</button></a>', unsafe_allow_html=True)
+                    else:
+                        st.caption("Sin URL de súper")
+else:
+    st.info("La lista de la compra está vacía. Pulsa en 'Generar / Actualizar Lista de la Compra'.")
+
+st.write("---")
+
+# =========================================================
+# BARRA LATERAL: GESTIÓN DE INGREDIENTES Y RECETAS
+# =========================================================
+st.sidebar.write("---")
+st.sidebar.header("⚙️ Gestión de Ingredientes y Recetas")
+
+seccion_gestion = st.sidebar.radio("¿Qué deseas gestionar?", ["🛒 Ingredientes", "📖 Recetas"])
+
+if seccion_gestion == "🛒 Ingredientes":
+    st.sidebar.subheader("Gestión de Ingredientes")
+    modo_ing = st.sidebar.radio("Acción Ingrediente:", ["➕ Registrar Nuevo", "✏️ Editar / Borrar"], key="modo_ing")
+
+    if modo_ing == "➕ Registrar Nuevo":
+        with st.sidebar.form(key="form_nuevo_ing", clear_on_submit=True):
+            nombre_ing = st.text_input("Nombre:", placeholder="Ej: Arroz Bomba")
+            seccion_ing = st.selectbox("Sección Súper:", SECCIONES_SUPER)
+            tamano_pkg = st.number_input("Tamaño paquete:", min_value=1.0, value=1000.0, step=50.0)
+            unidad_pkg = st.selectbox("Unidad:", ["g", "ml", "unidades"], index=0)
+            url_ing = st.text_input("URL Supermercado (Ej: Mercadona):", placeholder="https://mercadona.es/...")
+
+            btn_guardar_ing = st.form_submit_button("➕ Guardar Ingrediente")
+
+        if btn_guardar_ing:
+            nom_limpio = nombre_ing.strip()
+            if not nom_limpio:
+                st.sidebar.error("Escribe un nombre.")
+            else:
+                existente = next((i for i in all_ingredientes if i.get("nombre").lower() == nom_limpio.lower()), None)
+                if existente:
+                    st.sidebar.error("¡Ya existe!")
+                else:
+                    nuevo_id = max([i.get("id", 0) for i in all_ingredientes], default=0) + 1
+                    all_ingredientes.append({
+                        "id": nuevo_id,
+                        "nombre": nom_limpio,
+                        "seccion_super": seccion_ing,
+                        "cantidad_paquete": float(tamano_pkg),
+                        "unidad": unidad_pkg,
+                        "url_referencia": url_ing.strip()
+                    })
+                    guardar_json(FILE_ING, all_ingredientes)
+                    st.sidebar.success("¡Guardado!")
+                    st.rerun()
+    else:
+        if all_ingredientes:
+            nombres_ing_list = sorted([i.get("nombre") for i in all_ingredientes])
+            ing_a_editar_nombre = st.sidebar.selectbox("Selecciona ingrediente:", nombres_ing_list)
+            ing_obj = next((i for i in all_ingredientes if i.get("nombre") == ing_a_editar_nombre), None)
+
+            if ing_obj:
+                with st.sidebar.form(key="form_editar_ing"):
+                    e_nombre = st.text_input("Nombre:", value=ing_obj.get("nombre"))
+                    e_seccion = st.selectbox("Sección:", SECCIONES_SUPER, index=SECCIONES_SUPER.index(ing_obj.get("seccion_super")) if ing_obj.get("seccion_super") in SECCIONES_SUPER else 0)
+                    e_tamano = st.number_input("Tamaño:", min_value=1.0, value=float(ing_obj.get("cantidad_paquete", 1000)))
+                    e_unidad = st.selectbox("Unidad:", ["g", "ml", "unidades"], index=["g", "ml", "unidades"].index(ing_obj.get("unidad", "g")))
+                    e_url = st.text_input("URL Supermercado:", value=ing_obj.get("url_referencia", ""))
+
+                    col_b1, col_b2 = st.columns(2)
+                    with col_b1:
+                        btn_act = st.form_submit_button("💾 Actualizar")
+                    with col_b2:
+                        btn_del = st.form_submit_button("🗑️ Borrar")
+
+                if btn_act:
+                    ing_obj["nombre"] = e_nombre.strip()
+                    ing_obj["seccion_super"] = e_seccion
+                    ing_obj["cantidad_paquete"] = float(e_tamano)
+                    ing_obj["unidad"] = e_unidad
+                    ing_obj["url_referencia"] = e_url.strip()
+                    guardar_json(FILE_ING, all_ingredientes)
+                    st.sidebar.success("¡Actualizado!")
+                    st.rerun()
+
+                if btn_del:
+                    all_ingredientes = [i for i in all_ingredientes if i.get("id") != ing_obj.get("id")]
+                    guardar_json(FILE_ING, all_ingredientes)
+                    st.sidebar.success("¡Eliminado!")
+                    st.rerun()
+        else:
+            st.sidebar.info("No hay ingredientes registrados.")
+
+else:
+    st.sidebar.subheader("Gestión de Recetas (Fuera de formularios para evitar bloqueos)")
+    modo_rec = st.sidebar.radio("Acción Receta:", ["➕ Crear Nueva", "✏️ Editar / Borrar"], key="modo_rec")
+
+    nombres_ing_disp = sorted([i.get("nombre") for i in all_ingredientes if i.get("nombre")])
+
+    if modo_rec == "➕ Crear Nueva":
+        st.sidebar.markdown("**Crear Nueva Receta**")
+        nombre_receta = st.sidebar.text_input("Nombre receta:", placeholder="Ej: Tortilla", key="nueva_rec_nombre")
+        categoria_receta = st.sidebar.selectbox("Categoría:", CATEGORIAS_MENU, key="nueva_rec_cat")
+
+        ingredientes_seleccionados = st.sidebar.multiselect("Selecciona ingredientes:", options=nombres_ing_disp, key="nueva_rec_ings")
+
+        cantidades_receta = {}
+        if ingredientes_seleccionados:
+            st.sidebar.markdown("**Indica las cantidades:**")
+            for ing_nom in ingredientes_seleccionados:
+                ing_obj = next((i for i in all_ingredientes if i.get("nombre") == ing_nom), {})
+                unid = ing_obj.get("unidad", "g")
+                cantidades_receta[ing_nom] = st.sidebar.number_input(f"'{ing_nom}' ({unid}):", min_value=0.1, value=100.0, step=10.0, key=f"cant_nueva_{ing_nom}")
+
+        if st.sidebar.button("💾 Guardar Receta Nueva"):
+            nombre_limpio = nombre_receta.strip()
+            if not nombre_limpio:
+                st.sidebar.error("Escribe el nombre de la receta.")
+            elif not ingredientes_seleccionados:
+                st.sidebar.error("Selecciona al menos un ingrediente.")
+            else:
+                existente_rec = next((r for r in recetas if r.get("nombre").lower() == nombre_limpio.lower()), None)
+                if existente_rec:
+                    st.sidebar.error("¡Ya existe una receta con ese nombre!")
+                else:
+                    nueva_id = max([r.get("id", 0) for r in recetas], default=0) + 1
+                    lista_ing_receta = []
+                    for ing_nom in ingredientes_seleccionados:
+                        ing_obj = next((i for i in all_ingredientes if i.get("nombre") == ing_nom), None)
+                        if ing_obj:
+                            lista_ing_receta.append({
+                                "ingrediente_id": ing_obj.get("id"),
+                                "cantidad_necesaria": cantidades_receta.get(ing_nom, 100.0)
+                            })
+
+                    recetas.append({
+                        "id": nueva_id,
+                        "nombre": nombre_limpio,
+                        "categoria": categoria_receta,
+                        "ingredientes": lista_ing_receta
+                    })
+                    guardar_json(FILE_REC, recetas)
+                    st.sidebar.success("¡Receta guardada con éxito!")
+                    st.rerun()
+    else:
+        if recetas:
+            nombres_rec_list = sorted([r.get("nombre") for r in recetas])
+            rec_a_editar_nombre = st.sidebar.selectbox("Selecciona receta a editar:", nombres_rec_list, key="sel_rec_editar")
+            rec_obj = next((r for r in recetas if r.get("nombre") == rec_a_editar_nombre), None)
+
+            if rec_obj:
+                re_nombre = st.sidebar.text_input("Nombre receta:", value=rec_obj.get("nombre"), key="edit_rec_nombre")
+                re_cat = st.sidebar.selectbox("Categoría:", CATEGORIAS_MENU, index=CATEGORIAS_MENU.index(rec_obj.get("categoria")) if rec_obj.get("categoria") in CATEGORIAS_MENU else 0, key="edit_rec_cat")
+
+                current_ing_ids = [item.get("ingrediente_id") for item in rec_obj.get("ingredientes", [])]
+                current_ing_nombres = [i.get("nombre") for i in all_ingredientes if i.get("id") in current_ing_ids]
+                
+                re_ing_sel = st.sidebar.multiselect("Ingredientes:", options=nombres_ing_disp, default=current_ing_nombres, key="edit_rec_ings")
+
+                re_cantidades = {}
+                if re_ing_sel:
+                    st.sidebar.markdown("**Actualiza las cantidades:**")
+                    for ing_nom in re_ing_sel:
+                        ing_obj_temp = next((i for i in all_ingredientes if i.get("nombre") == ing_nom), {})
+                        unid = ing_obj_temp.get("unidad", "g")
+                        
+                        old_val = 100.0
+                        for itm in rec_obj.get("ingredientes", []):
+                            if itm.get("ingrediente_id") == ing_obj_temp.get("id"):
+                                old_val = float(itm.get("cantidad_necesaria", 100.0))
+                                
+                        re_cantidades[ing_nom] = st.sidebar.number_input(f"'{ing_nom}' ({unid}):", min_value=0.1, value=old_val, step=10.0, key=f"cant_edit_{ing_nom}")
+
+                col_rb1, col_rb2 = st.sidebar.columns(2)
+                with col_rb1:
+                    if st.button("💾 Actualizar Receta"):
+                        rec_obj["nombre"] = re_nombre.strip()
+                        rec_obj["categoria"] = re_cat
+                        nueva_lista_ing = []
+                        for ing_nom in re_ing_sel:
+                            ing_obj = next((i for i in all_ingredientes if i.get("nombre") == ing_nom), None)
+                            if ing_obj:
+                                nueva_lista_ing.append({
+                                    "ingrediente_id": ing_obj.get("id"),
+                                    "cantidad_necesaria": re_cantidades.get(ing_nom, 100.0)
+                                })
+                        rec_obj["ingredientes"] = nueva_lista_ing
+                        guardar_json(FILE_REC, recetas)
+                        st.sidebar.success("¡Receta actualizada!")
+                        st.rerun()
+                with col_rb2:
+                    if st.button("🗑️ Borrar Receta"):
+                        recetas = [r for r in recetas if r.get("id") != rec_obj.get("id")]
+                        guardar_json(FILE_REC, recetas)
+                        st.sidebar.success("¡Receta eliminada!")
+                        st.rerun()
+        else:
+            st.sidebar.info("No hay recetas registradas.")
